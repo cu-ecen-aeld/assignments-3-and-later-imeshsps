@@ -17,7 +17,16 @@ bool do_system(const char *cmd)
  *   or false() if it returned a failure
 */
 
-    return true;
+	int ret = system(cmd);
+
+    // If system() returns 0, the command executed successfully
+    if (ret == 0) {
+        return true;
+    } else {
+        return false;
+    }
+
+    //return true;
 }
 
 /**
@@ -47,7 +56,7 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    //command[count] = command[count];
 
 /*
  * TODO:
@@ -61,7 +70,31 @@ bool do_exec(int count, ...)
 
     va_end(args);
 
-    return true;
+    // Ensure the command is specified with an absolute path.
+    // If not, return false immediately.
+    if (command[0] == NULL || command[0][0] != '/') {
+        return false;
+    }
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        perror("fork");
+        return false;
+    }
+
+    if (pid == 0) { // Child process
+        execv(command[0], command);
+        perror("execv"); // Only reached if execv fails
+        exit(EXIT_FAILURE);
+    }
+
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("waitpid");
+        return false;
+    }
+
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 /**
@@ -91,7 +124,38 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   redirect standard out to a file specified by outputfile.
  *   The rest of the behaviour is same as do_exec()
  *
-*/
+*/  int fd = open(outputfile, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+    if (fd < 0) {
+        perror("open");
+        return false;
+    }
+    
+    int pid = fork();
+    if (pid == -1) {
+        perror("fork");
+        close(fd);
+        return false;
+    }
+    
+    if (pid == 0) { // Child process
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            perror("dup2");
+            close(fd);
+            exit(EXIT_FAILURE);
+        }
+        close(fd);
+        execv(command[0], command);
+        perror("execv"); // Only reached if execv fails
+        exit(EXIT_FAILURE);
+    }
+    
+    close(fd);
+    
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("waitpid");
+        return false;
+    }
 
     va_end(args);
 
