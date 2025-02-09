@@ -103,7 +103,7 @@ mkdir -p ${OUTDIR}/rootfs/lib ${OUTDIR}/rootfs/lib64
 
 # Copy the program interpreter
 if [ -f "${TOOLCHAIN_LIB64}${program_interpreter}" ]; then
-    cp "${TOOLCHAIN_LIB64}${program_interpreter}" "${OUTDIR}/rootfs/lib/"
+    cp "${TOOLCHAIN_LIB}${program_interpreter}" "${OUTDIR}/rootfs/lib/"
     echo "Copied program interpreter: ${program_interpreter}"
 else
     echo "Error: Program interpreter ${program_interpreter} not found in ${TOOLCHAIN_LIB64}!"
