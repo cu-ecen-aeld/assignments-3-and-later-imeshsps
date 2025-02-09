@@ -93,7 +93,8 @@ TOOLCHAIN_LIB="${TOOLCHAIN_PATH}/aarch64-none-linux-gnu/libc/lib/"
 TOOLCHAIN_LIB64="${TOOLCHAIN_PATH}/aarch64-none-linux-gnu/libc/lib64/"
 
 # Extract program interpreter
-program_interpreter=$(${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "program interpreter" | awk -F': ' '{print $2}' | tr -d '[]')
+#program_interpreter=$(${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "program interpreter" | awk -F': ' '{print $2}' | tr -d '[]')
+program_interpreter=$(${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "program interpreter" | awk -F': ' '{print $2}' | tr -d '[]' | sed 's|/lib/||')
 
 # Extract shared libraries
 shared_libraries=$(${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "Shared library" | awk -F'[][]' '{print $2}')
@@ -102,7 +103,7 @@ shared_libraries=$(${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | gre
 mkdir -p ${OUTDIR}/rootfs/lib ${OUTDIR}/rootfs/lib64
 
 # Copy the program interpreter
-if [ -f "${TOOLCHAIN_LIB64}${program_interpreter}" ]; then
+if [ -f "${TOOLCHAIN_LIB}${program_interpreter}" ]; then
     cp "${TOOLCHAIN_LIB}${program_interpreter}" "${OUTDIR}/rootfs/lib/"
     echo "Copied program interpreter: ${program_interpreter}"
 else
