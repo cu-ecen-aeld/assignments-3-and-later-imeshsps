@@ -8,7 +8,7 @@ CFLAGS := -Wall -Werror
 TARGET := writer
 
 # Default target: build the writer application
-default: $(TARGET)
+all: $(TARGET)
 
 # Build the writer application
 $(TARGET): writer.o
