@@ -10,9 +10,8 @@ all: $(OUTPUT)
 default: all
 
 $(OUTPUT): $(SRC)
-    $(CC) $(CFLAGS) -o $@ $^
-
+        $(CC) $(CFLAGS) -o $@ $^
 clean:
-    rm -f $(OUTPUT)
+        rm -f $(OUTPUT)
 
 .PHONY: all default clean
