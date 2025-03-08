@@ -1,4 +1,4 @@
-CC=gcc
+CC=$(TARGET)
 CFLAGS=-Wall -Wextra -Werror -g
 CROSS_COMPILE ?=
 TARGET=$(CROSS_COMPILE)gcc
@@ -10,9 +10,9 @@ all: $(OUTPUT)
 default: all
 
 $(OUTPUT): $(SRC)
-	$(TARGET) $(CFLAGS) -o $@ $^
+    $(CC) $(CFLAGS) -o $@ $^
 
 clean:
-	rm -f $(OUTPUT)
+    rm -f $(OUTPUT)
 
 .PHONY: all default clean
