@@ -1,7 +1,7 @@
-CC=$(CROSS_COMPILE)gcc
-CFLAGS=-Wall -Wextra -Werror -g
-OUTPUT=server/aesdsocket
-SRC=server/aesdsocket.c
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS = -Wall -Wextra -Werror -g
+OUTPUT = server/aesdsocket
+SRC = server/aesdsocket.c
 
 all: $(OUTPUT)
 
