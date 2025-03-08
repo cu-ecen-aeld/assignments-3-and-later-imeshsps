@@ -1,7 +1,7 @@
 CC ?= $(CROSS_COMPILE)gcc
 CFLAGS = -Wall -Wextra -Werror -g
-OUTPUT = server/aesdsocket
-SRC = server/aesdsocket.c
+OUTPUT = aesdsocket
+SRC = aesdsocket.c
 
 all: $(OUTPUT)
 
