@@ -8,3 +8,6 @@ aesd-build
 test.sh.log
 build.tar.xz
 finder-app/linux_build
+aesdsocket
+server/aesdsocket
+server/valgrind-out.txt
