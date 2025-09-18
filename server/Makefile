@@ -1,5 +1,6 @@
 CC ?= $(CROSS_COMPILE)gcc
 CFLAGS = -Wall -Wextra -Werror -g
+LDFLAGS = -lpthread
 OUTPUT = aesdsocket
 SRC = aesdsocket.c
 
@@ -8,7 +9,7 @@ all: $(OUTPUT)
 default: all
 
 $(OUTPUT): $(SRC)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
 	rm -f $(OUTPUT)
