@@ -1,6 +1,6 @@
 CC ?= $(CROSS_COMPILE)gcc
 CFLAGS ?= -Wall -Wextra -g
-LDFLAGS ?= 
+LDFLAGS ?= -Wl,--hash-style=gnu
 LIBS ?= -lpthread -lrt
 
 OUTPUT = aesdsocket
