@@ -1,6 +1,6 @@
 CC ?= $(CROSS_COMPILE)gcc
-CFLAGS = -Wall -Wextra -Werror -g
-LDFLAGS += -lpthread
+CFLAGS ?= -Wall -Wextra -Werror -g
+LDFLAGS ?= -lpthread
 OUTPUT = aesdsocket
 SRC = aesdsocket.c
 
