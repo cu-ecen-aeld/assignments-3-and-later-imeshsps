@@ -1,79 +1,93 @@
 /**
  * @file aesd-circular-buffer.c
- * @brief Functions and data related to a circular buffer implementation
- *
- * @author Dan Walkes
- * @date 2020-03-01
- * @copyright Copyright (c) 2020
- *
+ * @brief Circular buffer implementation with memory management for AESD char driver
  */
 
 #ifdef __KERNEL__
 #include <linux/string.h>
+#include <linux/slab.h>
 #else
 #include <string.h>
+#include <stdlib.h>
 #endif
 
 #include "aesd-circular-buffer.h"
 
 /**
- * Initializes the circular buffer described by @param buffer to an empty struct
+ * Initializes the circular buffer to an empty state
  */
- 
- 
 void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer)
 {
-    memset(buffer, 0, sizeof(struct aesd_circular_buffer));
+    size_t i;
+    if (!buffer)
+        return;
+
+    for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++) {
+        buffer->entry[i].buffptr = NULL;
+        buffer->entry[i].size = 0;
+    }
+    buffer->in_offs = 0;
+    buffer->out_offs = 0;
+    buffer->full = 0; /* false */
 }
 
 /**
- * Adds entry @param add_entry to @param buffer in the location specified in buffer->in_offs.
- * If the buffer was already full, overwrites the oldest entry and advances buffer->out_offs to the
- * new start location.
- * Any necessary locking must be handled by the caller.
- * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
+ * Adds entry to the circular buffer
+ * Frees memory for overwritten entries if necessary
  */
-void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer,
+                                    const struct aesd_buffer_entry *add_entry)
 {
-    // Overwrite the entry at in_offs
+    if (!buffer || !add_entry)
+        return;
+
+    /* Free old entry if it exists */
+    if (buffer->entry[buffer->in_offs].buffptr != NULL) {
+#ifdef __KERNEL__
+        kfree((void *)buffer->entry[buffer->in_offs].buffptr);
+#else
+        free((void *)buffer->entry[buffer->in_offs].buffptr);
+#endif
+    }
+
+    /* Copy the new entry (pointer ownership moves to buffer) */
     buffer->entry[buffer->in_offs] = *add_entry;
 
-    // If buffer is full, move out_offs to next oldest
+    /* If buffer is full, advance out_offs */
     if (buffer->full) {
         buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
 
-    // Advance in_offs
+    /* Advance in_offs */
     buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
 
-    // If in_offs wrapped around to out_offs, buffer is now full
-    buffer->full = (buffer->in_offs == buffer->out_offs);
+    /* Check if buffer is full */
+    if (buffer->in_offs == buffer->out_offs) {
+        buffer->full = 1; /* true */
+    } else {
+        buffer->full = 0;
+    }
 }
 
 /**
- * @param buffer the buffer to search for corresponding offset. Any necessary locking must be performed by caller.
- * @param char_offset the position to search for in the buffer list, describing the zero-referenced
- *      character index if all buffer strings were concatenated end to end
- * @param entry_offset_byte_rtn is a pointer specifying a location to store the byte of the returned aesd_buffer_entry
- *      buffptr member corresponding to char_offset. This value is only set when a matching char_offset is found
- *      in aesd_buffer.
- * @return the struct aesd_buffer_entry structure representing the position described by char_offset, or
- * NULL if this position is not available in the buffer (not enough data is written).
+ * Find buffer entry corresponding to a file offset
  */
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(
     struct aesd_circular_buffer *buffer,
     size_t char_offset,
     size_t *entry_offset_byte_rtn)
 {
-    if (!buffer || !entry_offset_byte_rtn) {
-        return NULL;
-    }
-
-    size_t total_offset = 0;
+    size_t total_offset;
     size_t entry_index;
     size_t valid_entries;
+    size_t i;
+    size_t entry_size;
 
-    // Determine number of valid entries in the buffer
+    if (!buffer || !entry_offset_byte_rtn)
+        return NULL;
+
+    total_offset = 0;
+
     if (buffer->full) {
         valid_entries = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     } else if (buffer->in_offs >= buffer->out_offs) {
@@ -82,21 +96,17 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(
         valid_entries = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->out_offs + buffer->in_offs;
     }
 
-    for (size_t i = 0; i < valid_entries; i++) {
-        // Calculate the actual index in the buffer array
+    for (i = 0; i < valid_entries; i++) {
         entry_index = (buffer->out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-
-        size_t entry_size = buffer->entry[entry_index].size;
+        entry_size = buffer->entry[entry_index].size;
 
         if (char_offset < total_offset + entry_size) {
             *entry_offset_byte_rtn = char_offset - total_offset;
             return &buffer->entry[entry_index];
         }
-
         total_offset += entry_size;
     }
 
-    // If we get here, the offset is beyond the valid buffer content
     return NULL;
 }
 
