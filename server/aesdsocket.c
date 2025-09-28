@@ -353,48 +353,53 @@ void* client_thread_func(void *arg) {
             return NULL;
         }
         
-        // Write all received bytes and check for newlines
+        // Write received data to device/file
+        ssize_t bytes_written = write(data_fd, buffer, bytes_received);
+        if (bytes_written != bytes_received) {
+            syslog(LOG_ERR, "Write failed - expected %zd bytes, wrote %zd bytes", bytes_received, bytes_written);
+            close(data_fd);
+            pthread_mutex_unlock(&data_mutex);
+            close(client_fd);
+            mark_thread_completed(pthread_self());
+            return NULL;
+        }
+        
+        // Check if we have a complete packet (ends with newline)
+        int has_newline = 0;
         for (int i = 0; i < bytes_received; i++) {
-            if (write(data_fd, &buffer[i], 1) != 1) {
-                syslog(LOG_ERR, "Write failed");
-                close(data_fd);
+            if (buffer[i] == '\n') {
+                has_newline = 1;
+                break;
+            }
+        }
+        
+        // If we have a newline, send entire file content back to client
+        if (has_newline) {
+#ifdef USE_AESD_CHAR_DEVICE
+            // Close and reopen for reading from the beginning
+            close(data_fd);
+            data_fd = open(DATA_FILE, O_RDONLY);
+            if (data_fd == -1) {
+                syslog(LOG_ERR, "Failed to reopen data file for reading");
                 pthread_mutex_unlock(&data_mutex);
                 close(client_fd);
                 mark_thread_completed(pthread_self());
                 return NULL;
             }
-            
-            // If newline, send entire file content back to client
-            if (buffer[i] == '\n') {
-#ifdef USE_AESD_CHAR_DEVICE
-                // Close and reopen for reading from the beginning
-                close(data_fd);
-                data_fd = open(DATA_FILE, O_RDONLY);
-                if (data_fd == -1) {
-                    syslog(LOG_ERR, "Failed to reopen data file for reading");
+#else
+            lseek(data_fd, 0, SEEK_SET);
+#endif
+            char read_buffer[BUFFER_SIZE];
+            ssize_t read_bytes;
+            while ((read_bytes = read(data_fd, read_buffer, BUFFER_SIZE)) > 0) {
+                if (send(client_fd, read_buffer, read_bytes, 0) == -1) {
+                    syslog(LOG_ERR, "Send failed");
+                    close(data_fd);
                     pthread_mutex_unlock(&data_mutex);
                     close(client_fd);
                     mark_thread_completed(pthread_self());
                     return NULL;
                 }
-#else
-                lseek(data_fd, 0, SEEK_SET);
-#endif
-                char read_buffer[BUFFER_SIZE];
-                ssize_t read_bytes;
-                while ((read_bytes = read(data_fd, read_buffer, BUFFER_SIZE)) > 0) {
-                    if (send(client_fd, read_buffer, read_bytes, 0) == -1) {
-                        syslog(LOG_ERR, "Send failed");
-                        close(data_fd);
-                        pthread_mutex_unlock(&data_mutex);
-                        close(client_fd);
-                        mark_thread_completed(pthread_self());
-                        return NULL;
-                    }
-                }
-#ifndef USE_AESD_CHAR_DEVICE
-                lseek(data_fd, 0, SEEK_END);
-#endif
             }
         }
         
