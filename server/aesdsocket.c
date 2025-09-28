@@ -269,7 +269,7 @@ void* timer_thread_func(void *arg __attribute__((unused))) {
 }
 #endif
 
-// Client thread function
+// Client thread function with proper file descriptor management
 void* client_thread_func(void *arg) {
     struct thread_data *data = (struct thread_data*)arg;
     int client_fd = data->client_fd;
@@ -290,6 +290,8 @@ void* client_thread_func(void *arg) {
     syslog(LOG_INFO, "Accepted connection from %s", client_ip);
     
     while (!shutdown_requested && (bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0)) > 0) {
+        int data_fd = -1;  // Initialize to -1
+        
         pthread_mutex_lock(&data_mutex);
         
 #ifdef USE_AESD_CHAR_DEVICE
@@ -297,7 +299,7 @@ void* client_thread_func(void *arg) {
         uint32_t write_cmd, write_cmd_offset;
         if (parse_seekto_command(buffer, bytes_received, &write_cmd, &write_cmd_offset)) {
             // This is a seek command - handle it specially
-            int data_fd = open(DATA_FILE, O_RDWR);
+            data_fd = open(DATA_FILE, O_RDWR);
             if (data_fd == -1) {
                 syslog(LOG_ERR, "Failed to open data file for seek: %s", strerror(errno));
                 pthread_mutex_unlock(&data_mutex);
@@ -334,16 +336,16 @@ void* client_thread_func(void *arg) {
                 }
             }
             
+            // Close immediately after use
             close(data_fd);
             pthread_mutex_unlock(&data_mutex);
             continue; // Don't process this as a regular write
         }
         
-        // Regular write processing for non-seek commands
-        // Open device file for each operation to avoid blocking
-        int data_fd = open(DATA_FILE, O_RDWR);
+        // Regular write processing - open device file ONLY when needed
+        data_fd = open(DATA_FILE, O_RDWR);
 #else
-        int data_fd = open(DATA_FILE, O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        data_fd = open(DATA_FILE, O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #endif
         if (data_fd == -1) {
             syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
@@ -432,7 +434,11 @@ void* client_thread_func(void *arg) {
             }
         }
         
-        close(data_fd);
+        // CRITICAL: Always close the file descriptor immediately after use
+        if (data_fd != -1) {
+            close(data_fd);
+            data_fd = -1;
+        }
         pthread_mutex_unlock(&data_mutex);
     }
     
