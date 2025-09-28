@@ -353,15 +353,22 @@ void* client_thread_func(void *arg) {
             return NULL;
         }
         
-        // Write received data to device/file
-        ssize_t bytes_written = write(data_fd, buffer, bytes_received);
-        if (bytes_written != bytes_received) {
-            syslog(LOG_ERR, "Write failed - expected %zd bytes, wrote %zd bytes", bytes_received, bytes_written);
-            close(data_fd);
-            pthread_mutex_unlock(&data_mutex);
-            close(client_fd);
-            mark_thread_completed(pthread_self());
-            return NULL;
+        // Write all received bytes to device/file
+        ssize_t total_written = 0;
+        while (total_written < bytes_received) {
+            ssize_t bytes_written = write(data_fd, buffer + total_written, bytes_received - total_written);
+            if (bytes_written == -1) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                syslog(LOG_ERR, "Write failed: %s", strerror(errno));
+                close(data_fd);
+                pthread_mutex_unlock(&data_mutex);
+                close(client_fd);
+                mark_thread_completed(pthread_self());
+                return NULL;
+            }
+            total_written += bytes_written;
         }
         
         // Check if we have a complete packet (ends with newline)
@@ -376,30 +383,52 @@ void* client_thread_func(void *arg) {
         // If we have a newline, send entire file content back to client
         if (has_newline) {
 #ifdef USE_AESD_CHAR_DEVICE
-            // Close and reopen for reading from the beginning
+            // For char device, close and reopen to reset file position to beginning
             close(data_fd);
             data_fd = open(DATA_FILE, O_RDONLY);
             if (data_fd == -1) {
-                syslog(LOG_ERR, "Failed to reopen data file for reading");
+                syslog(LOG_ERR, "Failed to reopen data file for reading: %s", strerror(errno));
                 pthread_mutex_unlock(&data_mutex);
                 close(client_fd);
                 mark_thread_completed(pthread_self());
                 return NULL;
             }
 #else
-            lseek(data_fd, 0, SEEK_SET);
+            // For regular files, seek to beginning
+            if (lseek(data_fd, 0, SEEK_SET) == -1) {
+                syslog(LOG_ERR, "Failed to seek to beginning: %s", strerror(errno));
+                close(data_fd);
+                pthread_mutex_unlock(&data_mutex);
+                close(client_fd);
+                mark_thread_completed(pthread_self());
+                return NULL;
+            }
 #endif
+
             char read_buffer[BUFFER_SIZE];
             ssize_t read_bytes;
+            
             while ((read_bytes = read(data_fd, read_buffer, BUFFER_SIZE)) > 0) {
-                if (send(client_fd, read_buffer, read_bytes, 0) == -1) {
-                    syslog(LOG_ERR, "Send failed");
-                    close(data_fd);
-                    pthread_mutex_unlock(&data_mutex);
-                    close(client_fd);
-                    mark_thread_completed(pthread_self());
-                    return NULL;
+                ssize_t total_sent = 0;
+                while (total_sent < read_bytes) {
+                    ssize_t sent = send(client_fd, read_buffer + total_sent, read_bytes - total_sent, 0);
+                    if (sent == -1) {
+                        if (errno == EINTR) {
+                            continue;
+                        }
+                        syslog(LOG_ERR, "Send failed: %s", strerror(errno));
+                        close(data_fd);
+                        pthread_mutex_unlock(&data_mutex);
+                        close(client_fd);
+                        mark_thread_completed(pthread_self());
+                        return NULL;
+                    }
+                    total_sent += sent;
                 }
+            }
+            
+            if (read_bytes == -1) {
+                syslog(LOG_ERR, "Read failed: %s", strerror(errno));
             }
         }
         
