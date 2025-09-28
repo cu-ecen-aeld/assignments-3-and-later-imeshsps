@@ -1,5 +1,5 @@
 /**
- * @file aesdchar.c
+ * @file main.c
  * @brief AESD char driver implementation (C90 compliant)
  */
 
@@ -23,6 +23,15 @@ MODULE_AUTHOR("Imesh Sachinda");
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
+
+/* Define MUTEX_LOCK and MUTEX_UNLOCK macros if not already defined */
+#ifndef MUTEX_LOCK
+#define MUTEX_LOCK(lock) mutex_lock(lock)
+#endif
+
+#ifndef MUTEX_UNLOCK
+#define MUTEX_UNLOCK(lock) mutex_unlock(lock)
+#endif
 
 /* Open */
 int aesd_open(struct inode *inode, struct file *filp)
@@ -118,7 +127,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
         }
         memcpy(combined, last_entry->buffptr, last_entry->size);
         memcpy(combined + last_entry->size, kbuf, count);
-        kfree(last_entry->buffptr);
+        kfree((void*)last_entry->buffptr);  /* Cast away const for freeing */
         last_entry->buffptr = combined;
         last_entry->size += count;
 
@@ -140,8 +149,13 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
             }
             memcpy(entry_buf, kbuf + start, len);
 
-            new_entry.buffptr = entry_buf;
+            new_entry.buffptr = entry_buf;  /* This is now valid since buffptr is const char* */
             new_entry.size = len;
+
+            /* Check if we need to free an old entry before overwriting */
+            if (dev->circ_buf.full && dev->circ_buf.entry[dev->circ_buf.in_offs].buffptr) {
+                kfree((void*)dev->circ_buf.entry[dev->circ_buf.in_offs].buffptr);
+            }
 
             aesd_circular_buffer_add_entry(&dev->circ_buf, &new_entry);
             start = i + 1;
@@ -221,7 +235,7 @@ void aesd_cleanup_module(void)
     for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++) {
         entry = &aesd_device.circ_buf.entry[i];
         if (entry->buffptr)
-            kfree(entry->buffptr);
+            kfree((void*)entry->buffptr);  /* Cast away const for freeing */
     }
 
     unregister_chrdev_region(devno, 1);
@@ -229,4 +243,3 @@ void aesd_cleanup_module(void)
 
 module_init(aesd_init_module);
 module_exit(aesd_cleanup_module);
-

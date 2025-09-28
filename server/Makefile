@@ -1,19 +1,29 @@
-CC ?= $(CROSS_COMPILE)gcc
-CFLAGS ?= -Wall -Wextra -g
-LDFLAGS ?= -Wl,--hash-style=gnu
-LIBS ?= -lpthread -lrt
+# Makefile for aesdsocket
 
-OUTPUT = aesdsocket
-SRC = aesdsocket.c
+CC = gcc
+CFLAGS = -Wall -Werror -g -std=gnu99
+LIBS = -lpthread
 
-all: $(OUTPUT)
+# Set USE_AESD_CHAR_DEVICE to 1 by default as per assignment requirements
+USE_AESD_CHAR_DEVICE ?= 1
 
-default: all
+ifeq ($(USE_AESD_CHAR_DEVICE),1)
+    CFLAGS += -DUSE_AESD_CHAR_DEVICE=1
+endif
 
-$(OUTPUT): $(SRC)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+TARGET = aesdsocket
+SOURCES = aesdsocket.c
+OBJECTS = $(SOURCES:.c=.o)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS)
+	$(CC) $(OBJECTS) -o $(TARGET) $(LIBS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OUTPUT)
+	rm -f $(OBJECTS) $(TARGET)
 
-.PHONY: all default clean
+.PHONY: all clean

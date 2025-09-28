@@ -12,12 +12,18 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <pthread.h>
+#ifndef USE_AESD_CHAR_DEVICE
 #include <time.h>
+#endif
 
 #define PORT "9000"
+#ifdef USE_AESD_CHAR_DEVICE
+#define DATA_FILE "/dev/aesdchar"
+#else
 #define DATA_FILE "/var/tmp/aesdsocketdata"
-#define BUFFER_SIZE 1024
 #define TIMESTAMP_INTERVAL 10
+#endif
+#define BUFFER_SIZE 1024
 
 int sockfd = -1;
 pthread_mutex_t data_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -34,8 +40,10 @@ struct thread_node {
 struct thread_node *thread_list_head = NULL;
 pthread_mutex_t thread_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+#ifndef USE_AESD_CHAR_DEVICE
 // Timer thread data
 pthread_t timer_thread;
+#endif
 
 // Thread data structure for client connections
 struct thread_data {
@@ -55,11 +63,13 @@ void cleanup() {
         sockfd = -1;
     }
     
+#ifndef USE_AESD_CHAR_DEVICE
     // Cancel timer thread
     if (timer_thread) {
         pthread_cancel(timer_thread);
         pthread_join(timer_thread, NULL);
     }
+#endif
     
     // Wait for all client threads to complete
     pthread_mutex_lock(&thread_list_mutex);
@@ -77,7 +87,9 @@ void cleanup() {
     thread_list_head = NULL;
     pthread_mutex_unlock(&thread_list_mutex);
     
+#ifndef USE_AESD_CHAR_DEVICE
     unlink(DATA_FILE);
+#endif
     pthread_mutex_destroy(&data_mutex);
     pthread_mutex_destroy(&thread_list_mutex);
     closelog();
@@ -147,6 +159,7 @@ void cleanup_completed_threads() {
     pthread_mutex_unlock(&thread_list_mutex);
 }
 
+#ifndef USE_AESD_CHAR_DEVICE
 // Timer thread function
 void* timer_thread_func(void *arg __attribute__((unused))) {
     struct timespec ts;
@@ -183,6 +196,7 @@ void* timer_thread_func(void *arg __attribute__((unused))) {
     
     return NULL;
 }
+#endif
 
 // Client thread function
 void* client_thread_func(void *arg) {
@@ -207,9 +221,14 @@ void* client_thread_func(void *arg) {
     while (!shutdown_requested && (bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0)) > 0) {
         pthread_mutex_lock(&data_mutex);
         
+#ifdef USE_AESD_CHAR_DEVICE
+        // Open device file for each operation to avoid blocking
+        int data_fd = open(DATA_FILE, O_RDWR);
+#else
         int data_fd = open(DATA_FILE, O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+#endif
         if (data_fd == -1) {
-            syslog(LOG_ERR, "Failed to open data file");
+            syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
             pthread_mutex_unlock(&data_mutex);
             close(client_fd);
             mark_thread_completed(pthread_self());
@@ -229,7 +248,20 @@ void* client_thread_func(void *arg) {
             
             // If newline, send entire file content back to client
             if (buffer[i] == '\n') {
+#ifdef USE_AESD_CHAR_DEVICE
+                // Close and reopen for reading from the beginning
+                close(data_fd);
+                data_fd = open(DATA_FILE, O_RDONLY);
+                if (data_fd == -1) {
+                    syslog(LOG_ERR, "Failed to reopen data file for reading");
+                    pthread_mutex_unlock(&data_mutex);
+                    close(client_fd);
+                    mark_thread_completed(pthread_self());
+                    return NULL;
+                }
+#else
                 lseek(data_fd, 0, SEEK_SET);
+#endif
                 char read_buffer[BUFFER_SIZE];
                 ssize_t read_bytes;
                 while ((read_bytes = read(data_fd, read_buffer, BUFFER_SIZE)) > 0) {
@@ -242,7 +274,9 @@ void* client_thread_func(void *arg) {
                         return NULL;
                     }
                 }
+#ifndef USE_AESD_CHAR_DEVICE
                 lseek(data_fd, 0, SEEK_END);
+#endif
             }
         }
         
@@ -335,12 +369,14 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    // Start timer thread
+#ifndef USE_AESD_CHAR_DEVICE
+    // Start timer thread only when not using char device
     if (pthread_create(&timer_thread, NULL, timer_thread_func, NULL) != 0) {
         syslog(LOG_ERR, "Failed to create timer thread");
         close(sockfd);
         return -1;
     }
+#endif
 
     while (!shutdown_requested) {
         client_addr_size = sizeof client_addr;
