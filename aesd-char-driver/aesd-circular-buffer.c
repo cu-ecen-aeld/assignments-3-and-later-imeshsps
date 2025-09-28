@@ -42,31 +42,25 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer,
         return;
 
     /* Free old entry if it exists */
-    if (buffer->entry[buffer->in_offs].buffptr != NULL) {
+    if (buffer->entry[buffer->in_offs].buffptr) {
 #ifdef __KERNEL__
-        kfree((void *)buffer->entry[buffer->in_offs].buffptr);
+        kfree(buffer->entry[buffer->in_offs].buffptr);
 #else
-        free((void *)buffer->entry[buffer->in_offs].buffptr);
+        free(buffer->entry[buffer->in_offs].buffptr);
 #endif
     }
 
-    /* Copy the new entry (pointer ownership moves to buffer) */
+    /* Copy the new entry pointer and size */
     buffer->entry[buffer->in_offs] = *add_entry;
 
-    /* If buffer is full, advance out_offs */
+    /* Advance out_offs if buffer is full */
     if (buffer->full) {
         buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
 
-    /* Advance in_offs */
+    /* Advance in_offs and update full flag */
     buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-
-    /* Check if buffer is full */
-    if (buffer->in_offs == buffer->out_offs) {
-        buffer->full = 1; /* true */
-    } else {
-        buffer->full = 0;
-    }
+    buffer->full = (buffer->in_offs == buffer->out_offs);
 }
 
 /**
@@ -109,4 +103,3 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(
 
     return NULL;
 }
-

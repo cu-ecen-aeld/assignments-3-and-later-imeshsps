@@ -42,32 +42,31 @@ int aesd_release(struct inode *inode, struct file *filp)
 /* Read */
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
-    ssize_t retval;
+    ssize_t retval = 0;
     size_t offset;
     struct aesd_buffer_entry *entry;
     struct aesd_dev *dev = filp->private_data;
 
-    PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
-
-    retval = 0;
-
-    mutex_lock(&dev->lock);
-
+    MUTEX_LOCK(&dev->lock);
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circ_buf, *f_pos, &offset);
     if (!entry || !entry->buffptr) {
-        mutex_unlock(&dev->lock);
-        return 0;  /* EOF */
+        MUTEX_UNLOCK(&dev->lock);
+        return 0;
     }
 
+#ifdef __KERNEL__
     retval = min(count, entry->size - offset);
-
     if (copy_to_user(buf, entry->buffptr + offset, retval)) {
-        mutex_unlock(&dev->lock);
+        MUTEX_UNLOCK(&dev->lock);
         return -EFAULT;
     }
+#else
+    retval = count < entry->size - offset ? count : entry->size - offset;
+    memcpy(buf, entry->buffptr + offset, retval);
+#endif
 
     *f_pos += retval;
-    mutex_unlock(&dev->lock);
+    MUTEX_UNLOCK(&dev->lock);
 
     return retval;
 }
