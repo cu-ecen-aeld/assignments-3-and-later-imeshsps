@@ -10,7 +10,7 @@ else
 endif
 
 EXTRA_CFLAGS += $(DEBFLAGS)
-EXTRA_CFLAGS += -Wno-discarded-qualifiers
+
 
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
