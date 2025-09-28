@@ -51,33 +51,31 @@ int aesd_release(struct inode *inode, struct file *filp)
 /* Read */
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
-    ssize_t retval = 0;
+    ssize_t bytes_read = 0;
     size_t offset;
     struct aesd_buffer_entry *entry;
     struct aesd_dev *dev = filp->private_data;
-
+    
     MUTEX_LOCK(&dev->lock);
-    entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circ_buf, *f_pos, &offset);
-    if (!entry || !entry->buffptr) {
-        MUTEX_UNLOCK(&dev->lock);
-        return 0;
+    
+    while (bytes_read < count) {
+        entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circ_buf, *f_pos, &offset);
+        if (!entry || !entry->buffptr) {
+            break;  // No more entries
+        }
+        
+        size_t bytes_to_copy = min(count - bytes_read, entry->size - offset);
+        if (copy_to_user(buf + bytes_read, entry->buffptr + offset, bytes_to_copy)) {
+            MUTEX_UNLOCK(&dev->lock);
+            return -EFAULT;
+        }
+        
+        bytes_read += bytes_to_copy;
+        *f_pos += bytes_to_copy;
     }
-
-#ifdef __KERNEL__
-    retval = min(count, entry->size - offset);
-    if (copy_to_user(buf, entry->buffptr + offset, retval)) {
-        MUTEX_UNLOCK(&dev->lock);
-        return -EFAULT;
-    }
-#else
-    retval = count < entry->size - offset ? count : entry->size - offset;
-    memcpy(buf, entry->buffptr + offset, retval);
-#endif
-
-    *f_pos += retval;
+    
     MUTEX_UNLOCK(&dev->lock);
-
-    return retval;
+    return bytes_read;
 }
 
 /* Write */
