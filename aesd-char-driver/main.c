@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief AESD char driver implementation (C90 compliant)
+ * @brief AESD char driver implementation (C90 compliant) with llseek and ioctl support
  */
 
 #include <linux/module.h>
@@ -12,9 +12,11 @@
 #include <linux/slab.h>     /* kmalloc, kfree */
 #include <linux/kernel.h>   /* min() macro */
 #include <linux/mutex.h>    /* mutex */
+#include <linux/uaccess.h>  /* copy_to_user, copy_from_user */
 
 #include "aesdchar.h"
 #include "aesd-circular-buffer.h"
+#include "aesd_ioctl.h"
 
 int aesd_major = 0;  /* dynamic major */
 int aesd_minor = 0;
@@ -32,6 +34,44 @@ struct aesd_dev aesd_device;
 #ifndef MUTEX_UNLOCK
 #define MUTEX_UNLOCK(lock) mutex_unlock(lock)
 #endif
+
+/* Helper function to calculate total buffer size */
+static size_t aesd_get_total_size(struct aesd_circular_buffer *buffer)
+{
+    size_t total_size = 0;
+    uint8_t i;
+    struct aesd_buffer_entry *entry;
+    
+    for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++) {
+        entry = &buffer->entry[i];
+        if (entry->buffptr) {
+            total_size += entry->size;
+        }
+    }
+    return total_size;
+}
+
+/* Helper function to convert command index and offset to absolute file position */
+static loff_t aesd_cmd_offset_to_fpos(struct aesd_circular_buffer *buffer, 
+                                     uint32_t cmd_idx, uint32_t cmd_offset)
+{
+    loff_t fpos = 0;
+    uint8_t i;
+    uint8_t actual_idx;
+    struct aesd_buffer_entry *entry;
+    
+    /* Calculate the actual buffer index considering out_offs */
+    for (i = 0; i < cmd_idx; i++) {
+        actual_idx = (buffer->out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        entry = &buffer->entry[actual_idx];
+        if (entry->buffptr) {
+            fpos += entry->size;
+        }
+    }
+    
+    fpos += cmd_offset;
+    return fpos;
+}
 
 /* Open */
 int aesd_open(struct inode *inode, struct file *filp)
@@ -61,7 +101,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
     while (bytes_read < count) {
         entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circ_buf, *f_pos, &offset);
         if (!entry || !entry->buffptr) {
-            break;  // No more entries
+            break;  /* No more entries */
         }
         
         size_t bytes_to_copy = min(count - bytes_read, entry->size - offset);
@@ -166,6 +206,109 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     return retval;
 }
 
+/* llseek implementation */
+loff_t aesd_llseek(struct file *filp, loff_t off, int whence)
+{
+    struct aesd_dev *dev = filp->private_data;
+    loff_t newpos;
+    size_t total_size;
+    
+    MUTEX_LOCK(&dev->lock);
+    
+    total_size = aesd_get_total_size(&dev->circ_buf);
+    
+    switch (whence) {
+        case SEEK_SET:
+            newpos = off;
+            break;
+            
+        case SEEK_CUR:
+            newpos = filp->f_pos + off;
+            break;
+            
+        case SEEK_END:
+            newpos = total_size + off;
+            break;
+            
+        default:
+            MUTEX_UNLOCK(&dev->lock);
+            return -EINVAL;
+    }
+    
+    /* Check bounds */
+    if (newpos < 0 || newpos > total_size) {
+        MUTEX_UNLOCK(&dev->lock);
+        return -EINVAL;
+    }
+    
+    filp->f_pos = newpos;
+    MUTEX_UNLOCK(&dev->lock);
+    
+    return newpos;
+}
+
+/* ioctl implementation */
+long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_seekto seekto;
+    uint8_t cmd_count = 0;
+    uint8_t i;
+    uint8_t actual_idx;
+    struct aesd_buffer_entry *entry;
+    loff_t new_fpos;
+    
+    /* Check magic number and command number */
+    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) return -ENOTTY;
+    if (_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR) return -ENOTTY;
+    
+    switch (cmd) {
+        case AESDCHAR_IOCSEEKTO:
+            if (copy_from_user(&seekto, (struct aesd_seekto __user *)arg, sizeof(seekto))) {
+                return -EFAULT;
+            }
+            
+            MUTEX_LOCK(&dev->lock);
+            
+            /* Count valid commands in circular buffer */
+            for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++) {
+                actual_idx = (dev->circ_buf.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+                entry = &dev->circ_buf.entry[actual_idx];
+                if (entry->buffptr) {
+                    cmd_count++;
+                } else {
+                    break;
+                }
+            }
+            
+            /* Validate command index */
+            if (seekto.write_cmd >= cmd_count) {
+                MUTEX_UNLOCK(&dev->lock);
+                return -EINVAL;
+            }
+            
+            /* Get the specific command entry */
+            actual_idx = (dev->circ_buf.out_offs + seekto.write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+            entry = &dev->circ_buf.entry[actual_idx];
+            
+            /* Validate offset within command */
+            if (seekto.write_cmd_offset >= entry->size) {
+                MUTEX_UNLOCK(&dev->lock);
+                return -EINVAL;
+            }
+            
+            /* Calculate new file position */
+            new_fpos = aesd_cmd_offset_to_fpos(&dev->circ_buf, seekto.write_cmd, seekto.write_cmd_offset);
+            filp->f_pos = new_fpos;
+            
+            MUTEX_UNLOCK(&dev->lock);
+            return 0;
+            
+        default:
+            return -ENOTTY;
+    }
+}
+
 /* File operations structure */
 struct file_operations aesd_fops = {
     .owner = THIS_MODULE,
@@ -173,6 +316,8 @@ struct file_operations aesd_fops = {
     .write = aesd_write,
     .open = aesd_open,
     .release = aesd_release,
+    .llseek = aesd_llseek,
+    .unlocked_ioctl = aesd_unlocked_ioctl,
 };
 
 /* Setup cdev */

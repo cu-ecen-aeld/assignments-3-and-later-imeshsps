@@ -16,6 +16,20 @@
 #include <time.h>
 #endif
 
+#ifdef USE_AESD_CHAR_DEVICE
+#include <sys/ioctl.h>
+
+/* Include ioctl definitions inline to avoid path issues */
+struct aesd_seekto {
+    uint32_t write_cmd;
+    uint32_t write_cmd_offset;
+};
+
+#define AESD_IOC_MAGIC 0x16
+#define AESDCHAR_IOCSEEKTO _IOWR(AESD_IOC_MAGIC, 1, struct aesd_seekto)
+#define AESDCHAR_IOC_MAXNR 1
+#endif
+
 #define PORT "9000"
 #ifdef USE_AESD_CHAR_DEVICE
 #define DATA_FILE "/dev/aesdchar"
@@ -159,6 +173,63 @@ void cleanup_completed_threads() {
     pthread_mutex_unlock(&thread_list_mutex);
 }
 
+#ifdef USE_AESD_CHAR_DEVICE
+// Parse AESDCHAR_IOCSEEKTO command
+int parse_seekto_command(const char* buffer, int buffer_len, uint32_t* write_cmd, uint32_t* write_cmd_offset) {
+    const char* prefix = "AESDCHAR_IOCSEEKTO:";
+    const int prefix_len = strlen(prefix);
+    
+    // Check if buffer starts with the prefix and ends with newline
+    if (buffer_len < prefix_len + 3 || strncmp(buffer, prefix, prefix_len) != 0) {
+        return 0; // Not a seek command
+    }
+    
+    // Find the comma separator
+    const char* comma = strchr(buffer + prefix_len, ',');
+    if (comma == NULL) {
+        return 0; // Invalid format
+    }
+    
+    // Find the newline
+    const char* newline = strchr(comma, '\n');
+    if (newline == NULL) {
+        return 0; // Invalid format
+    }
+    
+    // Parse X value (write_cmd)
+    char x_str[32];
+    int x_len = comma - (buffer + prefix_len);
+    if (x_len >= sizeof(x_str)) {
+        return 0; // Too long
+    }
+    strncpy(x_str, buffer + prefix_len, x_len);
+    x_str[x_len] = '\0';
+    
+    // Parse Y value (write_cmd_offset)
+    char y_str[32];
+    int y_len = newline - (comma + 1);
+    if (y_len >= sizeof(y_str)) {
+        return 0; // Too long
+    }
+    strncpy(y_str, comma + 1, y_len);
+    y_str[y_len] = '\0';
+    
+    // Convert to integers
+    char* endptr;
+    *write_cmd = strtoul(x_str, &endptr, 10);
+    if (*endptr != '\0') {
+        return 0; // Invalid number
+    }
+    
+    *write_cmd_offset = strtoul(y_str, &endptr, 10);
+    if (*endptr != '\0') {
+        return 0; // Invalid number
+    }
+    
+    return 1; // Successfully parsed
+}
+#endif
+
 #ifndef USE_AESD_CHAR_DEVICE
 // Timer thread function
 void* timer_thread_func(void *arg __attribute__((unused))) {
@@ -222,6 +293,53 @@ void* client_thread_func(void *arg) {
         pthread_mutex_lock(&data_mutex);
         
 #ifdef USE_AESD_CHAR_DEVICE
+        // Check if this is a seek command
+        uint32_t write_cmd, write_cmd_offset;
+        if (parse_seekto_command(buffer, bytes_received, &write_cmd, &write_cmd_offset)) {
+            // This is a seek command - handle it specially
+            int data_fd = open(DATA_FILE, O_RDWR);
+            if (data_fd == -1) {
+                syslog(LOG_ERR, "Failed to open data file for seek: %s", strerror(errno));
+                pthread_mutex_unlock(&data_mutex);
+                close(client_fd);
+                mark_thread_completed(pthread_self());
+                return NULL;
+            }
+            
+            // Perform the ioctl seek operation
+            struct aesd_seekto seekto;
+            seekto.write_cmd = write_cmd;
+            seekto.write_cmd_offset = write_cmd_offset;
+            
+            if (ioctl(data_fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
+                syslog(LOG_ERR, "IOCTL seek failed: %s", strerror(errno));
+                close(data_fd);
+                pthread_mutex_unlock(&data_mutex);
+                close(client_fd);
+                mark_thread_completed(pthread_self());
+                return NULL;
+            }
+            
+            // Read from current position and send back to client
+            char read_buffer[BUFFER_SIZE];
+            ssize_t read_bytes;
+            while ((read_bytes = read(data_fd, read_buffer, BUFFER_SIZE)) > 0) {
+                if (send(client_fd, read_buffer, read_bytes, 0) == -1) {
+                    syslog(LOG_ERR, "Send failed after seek: %s", strerror(errno));
+                    close(data_fd);
+                    pthread_mutex_unlock(&data_mutex);
+                    close(client_fd);
+                    mark_thread_completed(pthread_self());
+                    return NULL;
+                }
+            }
+            
+            close(data_fd);
+            pthread_mutex_unlock(&data_mutex);
+            continue; // Don't process this as a regular write
+        }
+        
+        // Regular write processing for non-seek commands
         // Open device file for each operation to avoid blocking
         int data_fd = open(DATA_FILE, O_RDWR);
 #else
